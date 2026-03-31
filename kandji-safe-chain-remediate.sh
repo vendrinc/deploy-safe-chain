@@ -2,6 +2,13 @@
 
 set -u
 
+# Version policy:
+#   latest (default) — upgrade whenever installed != GitHub latest (always resolves latest from API).
+#   minimum — upgrade only when missing, below SAFE_CHAIN_MINIMUM_VERSION, or shell integration missing.
+#             GitHub latest is fetched only when an install run is needed.
+SAFE_CHAIN_VERSION_POLICY="${SAFE_CHAIN_VERSION_POLICY:-latest}"
+SAFE_CHAIN_MINIMUM_VERSION="${SAFE_CHAIN_MINIMUM_VERSION:-}"
+
 ROOT_LOG="/var/log/safe-chain-kandji/remediate_root.log"
 USER_LOG="/var/log/safe-chain-kandji/remediate_user.log"
 LOG_DIR="/var/log/safe-chain-kandji"
@@ -40,20 +47,41 @@ fetch_latest_version() {
 }
 
 normalize_version() {
-    echo "$1" | sed 's/^v//'
+    local s t
+    s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
+    [ -z "$s" ] && { printf '%s' ''; return 0; }
+    t=$(printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
+    printf '%s' "$t"
+}
+
+version_is_less() {
+    local a b first
+    a=$(normalize_version "$1")
+    b=$(normalize_version "$2")
+    if [ -z "$a" ] || [ -z "$b" ]; then
+        return 1
+    fi
+    first=$(printf '%s\n%s' "$a" "$b" | sort -V | head -n 1)
+    [ "$first" = "$a" ] && [ "$a" != "$b" ]
 }
 
 get_installed_version_for_user() {
     local user_home="$1"
     local safe_chain_bin="${user_home}/.safe-chain/bin/safe-chain"
     local installed_version=""
+    local out
 
     if [ ! -x "$safe_chain_bin" ]; then
         echo ""
         return 0
     fi
 
-    installed_version=$("$safe_chain_bin" -v 2>/dev/null | sed -n 's/.*Current safe-chain version:[[:space:]]*\(.*\)$/\1/p' | head -n 1)
+    if out=$("$safe_chain_bin" --version 2>/dev/null); then
+        installed_version=$(printf '%s\n' "$out" | sed -n 's/.*Current safe-chain version:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+    fi
+    if [ -z "$installed_version" ]; then
+        installed_version=$("$safe_chain_bin" -v 2>/dev/null | sed -n 's/.*Current safe-chain version:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+    fi
     echo "$installed_version"
 }
 
@@ -160,14 +188,47 @@ EOF
 }
 
 log_root "Starting safe-chain remediation."
-latest_version=$(fetch_latest_version)
-if [ -z "${latest_version:-}" ]; then
-    log_root "Remediation failed: latest version lookup failed."
+case "$SAFE_CHAIN_VERSION_POLICY" in
+    latest | minimum) ;;
+    *)
+        log_root "ERROR: SAFE_CHAIN_VERSION_POLICY must be 'latest' or 'minimum' (got: ${SAFE_CHAIN_VERSION_POLICY})."
+        exit 1
+        ;;
+esac
+
+if [ "$SAFE_CHAIN_VERSION_POLICY" = "minimum" ] && [ -z "$SAFE_CHAIN_MINIMUM_VERSION" ]; then
+    log_root "ERROR: SAFE_CHAIN_MINIMUM_VERSION must be set when SAFE_CHAIN_VERSION_POLICY=minimum."
     exit 1
 fi
 
-latest_version_clean=$(normalize_version "$latest_version")
-log_root "Latest GitHub release is ${latest_version}."
+latest_version=""
+latest_version_clean=""
+min_clean=""
+if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
+    latest_version=$(fetch_latest_version)
+    if [ -z "${latest_version:-}" ]; then
+        log_root "Remediation failed: latest version lookup failed."
+        exit 1
+    fi
+    latest_version_clean=$(normalize_version "$latest_version")
+    log_root "Policy=latest. Latest GitHub release is ${latest_version}."
+else
+    min_clean=$(normalize_version "$SAFE_CHAIN_MINIMUM_VERSION")
+    log_root "Policy=minimum. Required minimum is ${SAFE_CHAIN_MINIMUM_VERSION}; will fetch GitHub latest only when a user needs installation."
+fi
+
+ensure_install_release_tag() {
+    if [ -n "$latest_version" ]; then
+        return 0
+    fi
+    latest_version=$(fetch_latest_version)
+    if [ -z "${latest_version:-}" ]; then
+        return 1
+    fi
+    latest_version_clean=$(normalize_version "$latest_version")
+    log_root "Fetched latest GitHub release ${latest_version} for installation."
+    return 0
+}
 
 users_checked=0
 users_remediated=0
@@ -183,24 +244,46 @@ while IFS=":" read -r user uid home_dir; do
     if [ -z "$installed_version" ]; then
         log_root "Installing safe-chain for ${user}: not installed."
         should_install=1
-    elif [ "$installed_version_clean" != "$latest_version_clean" ]; then
-        log_root "Installing safe-chain for ${user}: ${installed_version} -> ${latest_version}."
-        should_install=1
-    elif ! has_shell_integration "$home_dir"; then
+    elif [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
+        if [ "$installed_version_clean" != "$latest_version_clean" ]; then
+            log_root "Installing safe-chain for ${user}: ${installed_version} -> ${latest_version}."
+            should_install=1
+        fi
+    else
+        if version_is_less "$installed_version_clean" "$min_clean"; then
+            log_root "Installing safe-chain for ${user}: ${installed_version} below minimum ${SAFE_CHAIN_MINIMUM_VERSION}."
+            should_install=1
+        fi
+    fi
+
+    if [ "$should_install" -eq 0 ] && ! has_shell_integration "$home_dir"; then
         log_root "Installing safe-chain for ${user}: shell integration markers missing."
         should_install=1
-    else
-        log_root "Skipping ${user}: already compliant (${installed_version})."
     fi
 
     if [ "$should_install" -eq 0 ]; then
+        log_root "Skipping ${user}: already compliant (${installed_version})."
+        continue
+    fi
+
+    if ! ensure_install_release_tag; then
+        users_failed=$((users_failed + 1))
+        log_user "ERROR: could not resolve latest release for installing safe-chain for ${user}."
         continue
     fi
 
     if run_install_for_user "$user" "$uid" "$home_dir" "$latest_version"; then
         post_version=$(get_installed_version_for_user "$home_dir")
         post_version_clean=$(normalize_version "$post_version")
-        if [ "$post_version_clean" = "$latest_version_clean" ] && has_shell_integration "$home_dir"; then
+        version_ok=0
+        if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
+            [ "$post_version_clean" = "$latest_version_clean" ] && version_ok=1
+        else
+            if [ -n "$post_version_clean" ] && ! version_is_less "$post_version_clean" "$min_clean"; then
+                version_ok=1
+            fi
+        fi
+        if [ "$version_ok" -eq 1 ] && has_shell_integration "$home_dir"; then
             users_remediated=$((users_remediated + 1))
             log_user "SUCCESS: ${user} now has safe-chain ${post_version} with shell integration markers."
         else

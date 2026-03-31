@@ -2,6 +2,13 @@
 
 set -u
 
+# Version policy:
+#   latest (default) — non‑compliant if installed version != GitHub latest.
+#   minimum — non‑compliant only if missing, below SAFE_CHAIN_MINIMUM_VERSION, or shell integration missing.
+#             Does not call the GitHub API for version comparison (only local vs minimum).
+SAFE_CHAIN_VERSION_POLICY="${SAFE_CHAIN_VERSION_POLICY:-latest}"
+SAFE_CHAIN_MINIMUM_VERSION="${SAFE_CHAIN_MINIMUM_VERSION:-}"
+
 LOG_FILE="/var/log/safe-chain-kandji/detect.log"
 LOG_DIR="$(dirname "$LOG_FILE")"
 mkdir -p "$LOG_DIR"
@@ -33,21 +40,44 @@ fetch_latest_version() {
     echo "$latest_version"
 }
 
+# Strip noise; keep leading numeric dotted version (1.2.2, 1.4.6, 2.0) for sort -V.
 normalize_version() {
-    echo "$1" | sed 's/^v//'
+    local s t
+    s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
+    [ -z "$s" ] && { printf '%s' ''; return 0; }
+    t=$(printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
+    printf '%s' "$t"
+}
+
+# True if normalized semver a is strictly less than b (uses sort -V; 1.2.2 < 1.4.6).
+version_is_less() {
+    local a b first
+    a=$(normalize_version "$1")
+    b=$(normalize_version "$2")
+    if [ -z "$a" ] || [ -z "$b" ]; then
+        return 1
+    fi
+    first=$(printf '%s\n%s' "$a" "$b" | sort -V | head -n 1)
+    [ "$first" = "$a" ] && [ "$a" != "$b" ]
 }
 
 get_installed_version_for_user() {
     local user_home="$1"
     local safe_chain_bin="${user_home}/.safe-chain/bin/safe-chain"
     local installed_version=""
+    local out
 
     if [ ! -x "$safe_chain_bin" ]; then
         echo ""
         return 0
     fi
 
-    installed_version=$("$safe_chain_bin" -v 2>/dev/null | sed -n 's/.*Current safe-chain version:[[:space:]]*\(.*\)$/\1/p' | head -n 1)
+    if out=$("$safe_chain_bin" --version 2>/dev/null); then
+        installed_version=$(printf '%s\n' "$out" | sed -n 's/.*Current safe-chain version:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+    fi
+    if [ -z "$installed_version" ]; then
+        installed_version=$("$safe_chain_bin" -v 2>/dev/null | sed -n 's/.*Current safe-chain version:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)
+    fi
     echo "$installed_version"
 }
 
@@ -94,14 +124,34 @@ list_target_users() {
 }
 
 log "Starting safe-chain detection."
-latest_version=$(fetch_latest_version)
-if [ -z "${latest_version:-}" ]; then
-    log "Detection failed: could not resolve latest version."
+case "$SAFE_CHAIN_VERSION_POLICY" in
+    latest | minimum) ;;
+    *)
+        log "ERROR: SAFE_CHAIN_VERSION_POLICY must be 'latest' or 'minimum' (got: ${SAFE_CHAIN_VERSION_POLICY})."
+        exit 1
+        ;;
+esac
+
+if [ "$SAFE_CHAIN_VERSION_POLICY" = "minimum" ] && [ -z "$SAFE_CHAIN_MINIMUM_VERSION" ]; then
+    log "ERROR: SAFE_CHAIN_MINIMUM_VERSION must be set when SAFE_CHAIN_VERSION_POLICY=minimum."
     exit 1
 fi
 
-latest_version_clean=$(normalize_version "$latest_version")
-log "Latest GitHub release is ${latest_version}."
+latest_version=""
+latest_version_clean=""
+min_clean=""
+if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
+    latest_version=$(fetch_latest_version)
+    if [ -z "${latest_version:-}" ]; then
+        log "Detection failed: could not resolve latest version."
+        exit 1
+    fi
+    latest_version_clean=$(normalize_version "$latest_version")
+    log "Policy=latest. Latest GitHub release is ${latest_version}."
+else
+    min_clean=$(normalize_version "$SAFE_CHAIN_MINIMUM_VERSION")
+    log "Policy=minimum. Required minimum version is ${SAFE_CHAIN_MINIMUM_VERSION}."
+fi
 
 users_checked=0
 
@@ -115,9 +165,16 @@ while IFS=":" read -r user uid home_dir; do
     fi
 
     installed_version_clean=$(normalize_version "$installed_version")
-    if [ "$installed_version_clean" != "$latest_version_clean" ]; then
-        log "REMEDIATE: ${user} has safe-chain ${installed_version}, expected ${latest_version}."
-        exit 1
+    if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
+        if [ "$installed_version_clean" != "$latest_version_clean" ]; then
+            log "REMEDIATE: ${user} has safe-chain ${installed_version}, expected ${latest_version}."
+            exit 1
+        fi
+    else
+        if version_is_less "$installed_version_clean" "$min_clean"; then
+            log "REMEDIATE: ${user} has safe-chain ${installed_version}, below minimum ${SAFE_CHAIN_MINIMUM_VERSION}."
+            exit 1
+        fi
     fi
 
     if ! has_shell_integration "$home_dir"; then
