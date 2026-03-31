@@ -10,10 +10,14 @@ This repository contains macOS scripts to deploy Aikido Safe Chain per-user in a
   Kandji remediation script. Installs or updates Safe Chain per user when non-compliant.
 - `instructions.MD`  
   Build plan and implementation notes.
+- `mosyle-safe-chain.sh`  
+  **Mosyle** (single custom command): merged detect + remediate. See **`mosyle-readme.md`** for scheduling and `SAFE_CHAIN_MOSYLE_MODE`.
+- `mosyle-readme.md`  
+  Mosyle deployment notes (daily schedule, logs, parity with Kandji).
 
 ## Version policy (environment variables)
 
-Both scripts read the same policy variables (set them in Kandji as custom script environment variables or export them in a wrapper). Remediation-only variables apply only to `kandji-safe-chain-remediate.sh`.
+The Kandji scripts read the same policy variables (set them in Kandji as custom script environment variables or export them in a wrapper). Remediation-only variables apply only to `kandji-safe-chain-remediate.sh`. The Mosyle script supports the same variables; see **`mosyle-readme.md`** for `SAFE_CHAIN_MOSYLE_MODE`.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
