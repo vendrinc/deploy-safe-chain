@@ -101,4 +101,6 @@ Logs are written to:
 
 ## Upstream project
 
-- Safe Chain repo: [AikidoSec/safe-chain](https://github.com/AikidoSec/safe-chain)
+**Aikido Safe Chain** is created and maintained by **[AikidoSec](https://github.com/AikidoSec)**. These scripts download and manage that upstream product; they are not part of Safe Chain itself.
+
+- Repository: [AikidoSec/safe-chain](https://github.com/AikidoSec/safe-chain)

@@ -46,6 +46,7 @@ Deploy Aikido Safe Chain per-user on macOS devices managed by Iru (Kandji), even
 
 ## Notes
 
+- **Aikido Safe Chain** is upstream software by **AikidoSec** ([AikidoSec/safe-chain](https://github.com/AikidoSec/safe-chain)); this repo only ships Kandji automation around it.
 - Installer URL pattern: `https://github.com/AikidoSec/safe-chain/releases/download/<tag>/install-safe-chain.sh` (pipe to `sh`, or checksum path when `SAFE_CHAIN_INSTALLER_SHA256` is set).
 - Verification parses `safe-chain --version` first, then `safe-chain -v`, matching output of the form `Current safe-chain version: <version>`.
 - Shell integration is validated by checking user shell startup files (bash/zsh profiles plus Fish `config.fish` and `conf.d/*.fish`) for Safe Chain markers.
