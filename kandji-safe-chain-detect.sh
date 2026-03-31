@@ -47,18 +47,33 @@ fetch_latest_version() {
     echo "$latest_version"
 }
 
-# Strip noise; keep leading numeric dotted version (1.2.2, 1.4.6, 2.0) for sort -V.
+# Strip leading v/whitespace; keep a token sort -V can compare (1.4.6, 2.5.0a, 2.5.0-rc.1, 1.0.0+build).
 normalize_version() {
-    local s t
+    local s
     s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
     [ -z "$s" ] && { printf '%s' ''; return 0; }
-    t=$(printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
-    printf '%s' "$t"
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9a-zA-Z.]+)?(\+[0-9a-zA-Z.]+)?$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*[a-zA-Z][0-9a-zA-Z]*$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/'
 }
 
-# Normalized value must be a plain dotted numeric version (avoids bad SAFE_CHAIN_MINIMUM_VERSION / tag input).
-is_valid_dotted_version() {
-    [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*$'
+# True if the string is usable for version compare (minimum, pins, equality checks).
+is_valid_version_compare_token() {
+    [ -z "${1:-}" ] && return 1
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9a-zA-Z.]+)?(\+[0-9a-zA-Z.]+)?$' && return 0
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*[a-zA-Z][0-9a-zA-Z]*$' && return 0
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*$' && return 0
+    return 1
 }
 
 # GitHub release tag used in URL path: allow only safe characters.
@@ -165,7 +180,7 @@ if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
         fi
         latest_version=$(printf '%s' "$SAFE_CHAIN_RELEASE_TAG")
         latest_version_clean=$(normalize_version "$latest_version")
-        if ! is_valid_dotted_version "$latest_version_clean"; then
+        if ! is_valid_version_compare_token "$latest_version_clean"; then
             log "ERROR: SAFE_CHAIN_RELEASE_TAG must normalize to a dotted version (e.g. 1.4.6); got tag=${SAFE_CHAIN_RELEASE_TAG} normalized=${latest_version_clean}."
             exit 1
         fi
@@ -180,9 +195,19 @@ if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
         log "Policy=latest. Latest GitHub release is ${latest_version}."
     fi
 else
+    # Sanity-check minimum: normalize must yield a valid token and match trim-only (no silent truncation).
+    min_stripped=$(printf '%s' "$SAFE_CHAIN_MINIMUM_VERSION" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
     min_clean=$(normalize_version "$SAFE_CHAIN_MINIMUM_VERSION")
-    if ! is_valid_dotted_version "$min_clean"; then
-        log "ERROR: SAFE_CHAIN_MINIMUM_VERSION is not a valid dotted version (value=${SAFE_CHAIN_MINIMUM_VERSION}, normalized=${min_clean})."
+    if ! is_valid_version_compare_token "$min_clean"; then
+        log "ERROR: SAFE_CHAIN_MINIMUM_VERSION normalized to an invalid version (value=${SAFE_CHAIN_MINIMUM_VERSION}, normalized=${min_clean})."
+        exit 1
+    fi
+    if ! is_valid_version_compare_token "$min_stripped"; then
+        log "ERROR: SAFE_CHAIN_MINIMUM_VERSION is not a valid version string after trim (value=${SAFE_CHAIN_MINIMUM_VERSION}, stripped=${min_stripped})."
+        exit 1
+    fi
+    if [ "$min_clean" != "$min_stripped" ]; then
+        log "ERROR: SAFE_CHAIN_MINIMUM_VERSION could not be normalized cleanly — reject extra or invalid characters (value=${SAFE_CHAIN_MINIMUM_VERSION}, stripped=${min_stripped}, normalized=${min_clean})."
         exit 1
     fi
     log "Policy=minimum. Required minimum version is ${SAFE_CHAIN_MINIMUM_VERSION} (normalized ${min_clean})."

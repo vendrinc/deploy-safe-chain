@@ -55,11 +55,22 @@ fetch_latest_version() {
 }
 
 normalize_version() {
-    local s t
+    local s
     s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
     [ -z "$s" ] && { printf '%s' ''; return 0; }
-    t=$(printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
-    printf '%s' "$t"
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9a-zA-Z.]+)?(\+[0-9a-zA-Z.]+)?$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*[a-zA-Z][0-9a-zA-Z]*$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    if printf '%s' "$s" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+        printf '%s' "$s"
+        return 0
+    fi
+    printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/'
 }
 
 version_is_less() {
@@ -73,8 +84,12 @@ version_is_less() {
     [ "$first" = "$a" ] && [ "$a" != "$b" ]
 }
 
-is_valid_dotted_version() {
-    [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*$'
+is_valid_version_compare_token() {
+    [ -z "${1:-}" ] && return 1
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9a-zA-Z.]+)?(\+[0-9a-zA-Z.]+)?$' && return 0
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*[a-zA-Z][0-9a-zA-Z]*$' && return 0
+    printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*$' && return 0
+    return 1
 }
 
 is_safe_release_tag() {
@@ -278,7 +293,7 @@ if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
         fi
         latest_version=$(printf '%s' "$SAFE_CHAIN_RELEASE_TAG")
         latest_version_clean=$(normalize_version "$latest_version")
-        if ! is_valid_dotted_version "$latest_version_clean"; then
+        if ! is_valid_version_compare_token "$latest_version_clean"; then
             log_root "ERROR: SAFE_CHAIN_RELEASE_TAG must normalize to a dotted version; tag=${SAFE_CHAIN_RELEASE_TAG} normalized=${latest_version_clean}."
             exit 1
         fi
@@ -293,9 +308,19 @@ if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
         log_root "Policy=latest. Latest GitHub release is ${latest_version}."
     fi
 else
+    # Sanity-check minimum: normalize must yield a valid token and match trim-only (no silent truncation).
+    min_stripped=$(printf '%s' "$SAFE_CHAIN_MINIMUM_VERSION" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[vV]//')
     min_clean=$(normalize_version "$SAFE_CHAIN_MINIMUM_VERSION")
-    if ! is_valid_dotted_version "$min_clean"; then
-        log_root "ERROR: SAFE_CHAIN_MINIMUM_VERSION is not a valid dotted version (value=${SAFE_CHAIN_MINIMUM_VERSION}, normalized=${min_clean})."
+    if ! is_valid_version_compare_token "$min_clean"; then
+        log_root "ERROR: SAFE_CHAIN_MINIMUM_VERSION normalized to an invalid version (value=${SAFE_CHAIN_MINIMUM_VERSION}, normalized=${min_clean})."
+        exit 1
+    fi
+    if ! is_valid_version_compare_token "$min_stripped"; then
+        log_root "ERROR: SAFE_CHAIN_MINIMUM_VERSION is not a valid version string after trim (value=${SAFE_CHAIN_MINIMUM_VERSION}, stripped=${min_stripped})."
+        exit 1
+    fi
+    if [ "$min_clean" != "$min_stripped" ]; then
+        log_root "ERROR: SAFE_CHAIN_MINIMUM_VERSION could not be normalized cleanly — reject extra or invalid characters (value=${SAFE_CHAIN_MINIMUM_VERSION}, stripped=${min_stripped}, normalized=${min_clean})."
         exit 1
     fi
     log_root "Policy=minimum. Required minimum is ${SAFE_CHAIN_MINIMUM_VERSION}; will use pinned tag or fetch GitHub latest when a user needs installation."
@@ -307,7 +332,7 @@ if [ -n "$SAFE_CHAIN_RELEASE_TAG" ] && [ "$SAFE_CHAIN_VERSION_POLICY" = "minimum
         exit 1
     fi
     _pin_clean=$(normalize_version "$SAFE_CHAIN_RELEASE_TAG")
-    if ! is_valid_dotted_version "$_pin_clean"; then
+    if ! is_valid_version_compare_token "$_pin_clean"; then
         log_root "ERROR: SAFE_CHAIN_RELEASE_TAG must normalize to a dotted version (tag=${SAFE_CHAIN_RELEASE_TAG}, normalized=${_pin_clean})."
         exit 1
     fi
@@ -320,7 +345,7 @@ ensure_install_release_tag() {
     if [ -n "$SAFE_CHAIN_RELEASE_TAG" ]; then
         latest_version=$(printf '%s' "$SAFE_CHAIN_RELEASE_TAG")
         latest_version_clean=$(normalize_version "$latest_version")
-        if ! is_valid_dotted_version "$latest_version_clean"; then
+        if ! is_valid_version_compare_token "$latest_version_clean"; then
             return 1
         fi
         log_root "Using pinned release tag ${latest_version} for installation."

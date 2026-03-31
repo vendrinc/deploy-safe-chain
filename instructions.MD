@@ -25,7 +25,7 @@ Deploy Aikido Safe Chain per-user on macOS devices managed by Iru (Kandji), even
    - shell profile files contain Safe Chain integration markers
 4. Implemented version awareness:
    - `latest`: either query GitHub releases API for `tag_name`, or use `SAFE_CHAIN_RELEASE_TAG` to pin the expected tag (no API); default pin `1.4.6`, override with `export SAFE_CHAIN_RELEASE_TAG=""` to track GitHub latest
-   - `minimum`: compare installed version to `SAFE_CHAIN_MINIMUM_VERSION` only (no API in detect); validate normalized minimum with `is_valid_dotted_version`; remediate uses `SAFE_CHAIN_RELEASE_TAG` if set, else fetches latest when an install is required
+   - `minimum`: compare installed version to `SAFE_CHAIN_MINIMUM_VERSION` only (no API in detect); validate normalized minimum with `is_valid_version_compare_token`; remediate uses `SAFE_CHAIN_RELEASE_TAG` if set, else fetches latest when an install is required
    - dotted semver-style comparison (e.g. `1.2.2` vs `1.4.6`) using `sort -V` after normalization
 5. Implemented per-user remediation:
    - run installer as each user context with explicit `HOME` and user-first PATH

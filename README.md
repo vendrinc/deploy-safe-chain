@@ -18,7 +18,7 @@ Both scripts read the same policy variables (set them in Kandji as custom script
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SAFE_CHAIN_VERSION_POLICY` | `latest` | How strictly version is enforced. |
-| `SAFE_CHAIN_MINIMUM_VERSION` | *(empty)* | Required when `SAFE_CHAIN_VERSION_POLICY=minimum`. Must be a dotted numeric version (e.g. `1.4.6`); invalid values are rejected after normalization. |
+| `SAFE_CHAIN_MINIMUM_VERSION` | *(empty)* | Required when `SAFE_CHAIN_VERSION_POLICY=minimum`. Must be a single version token (e.g. `1.4.6`, `2.5.0-rc.1`); the scripts validate the normalized value and reject stray characters so `normalize_version` cannot silently truncate input. |
 | `SAFE_CHAIN_RELEASE_TAG` | `1.4.6` | **Pinned** GitHub release tag for download URLs (use the exact tag from [releases](https://github.com/AikidoSec/safe-chain/releases)). When non-empty, **skips the GitHub API** for `latest` policy (detect/remediate compare against this tag). With `minimum` policy, installs use this tag when set; if empty, the API resolves **latest** at install time. To **track GitHub latest** instead of pinning, set an explicit empty value: `export SAFE_CHAIN_RELEASE_TAG=""` (the scripts use bash `${VAR-default}` so empty overrides the default). |
 | `SAFE_CHAIN_INSTALLER_SHA256` | *(empty)* | **Remediate only.** Optional 64-character hex SHA-256 of `install-safe-chain.sh` for the pinned release. When set, the installer is downloaded to a temp file, verified with `sha256sum -c` or `shasum -a 256 -c`, then executed. **Requires** `SAFE_CHAIN_RELEASE_TAG` so the artifact is fixed. If unset, the script uses `curl … \| sh` (no checksum). |
 
@@ -82,7 +82,7 @@ Installed version is read from `safe-chain --version`, falling back to `safe-cha
 
 `Current safe-chain version: <version>`
 
-Versions are compared as dotted numbers (leading `v` on tags or variables is stripped).
+Versions are compared as dotted numbers (leading `v` on tags or variables is stripped). Suffixes such as **`2.5.0a`** or prerelease strings like **`2.5.0-rc.1`** are preserved so **`2.5.0a`** and **`2.5.0b`** are not treated as the same version. Ordering uses `sort -V` (not full semver: ordering of pre-releases vs stable may differ from strict semver rules).
 
 ## Logging
 
