@@ -40,7 +40,7 @@ A user is compliant when all of the following hold:
 
 1. `~/.safe-chain/bin/safe-chain` exists and is executable.
 2. **Version:** Under `latest`, installed version equals the resolved tag (GitHub **latest** or **`SAFE_CHAIN_RELEASE_TAG`**). Under `minimum`, installed version is not less than `SAFE_CHAIN_MINIMUM_VERSION` (comparison uses dotted numeric versions such as `1.2.2` vs `1.4.6`).
-3. Shell profile files contain Safe Chain integration markers (so shell aliases/hooks are present).
+3. Shell startup files contain Safe Chain integration markers: `~/.zshrc`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`, plus Fish `~/.config/fish/config.fish` and `~/.config/fish/conf.d/*.fish`.
 
 ## Detect script behavior
 

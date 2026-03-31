@@ -121,11 +121,19 @@ has_shell_integration() {
         "${user_home}/.zprofile" \
         "${user_home}/.bashrc" \
         "${user_home}/.bash_profile" \
-        "${user_home}/.profile"; do
+        "${user_home}/.profile" \
+        "${user_home}/.config/fish/config.fish"; do
         if [ -f "$shell_file" ] && grep -Eq 'safe-chain|\.safe-chain' "$shell_file"; then
             return 0
         fi
     done
+    if [ -d "${user_home}/.config/fish/conf.d" ]; then
+        for shell_file in "${user_home}/.config/fish/conf.d"/*.fish; do
+            if [ -f "$shell_file" ] && grep -Eq 'safe-chain|\.safe-chain' "$shell_file"; then
+                return 0
+            fi
+        done
+    fi
     return 1
 }
 
