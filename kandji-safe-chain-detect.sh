@@ -3,11 +3,18 @@
 set -u
 
 # Version policy:
-#   latest (default) — non‑compliant if installed version != GitHub latest.
+#   latest — compare installed version to the expected release (see SAFE_CHAIN_RELEASE_TAG).
 #   minimum — non‑compliant only if missing, below SAFE_CHAIN_MINIMUM_VERSION, or shell integration missing.
 #             Does not call the GitHub API for version comparison (only local vs minimum).
+#
+# Default is pinned to release 1.4.6 (no GitHub API). To track GitHub "latest" instead, clear the pin, e.g.:
+#   export SAFE_CHAIN_RELEASE_TAG=""
+# (Use ${VAR-default} below so an explicit empty value means “no pin”.)
 SAFE_CHAIN_VERSION_POLICY="${SAFE_CHAIN_VERSION_POLICY:-latest}"
 SAFE_CHAIN_MINIMUM_VERSION="${SAFE_CHAIN_MINIMUM_VERSION:-}"
+# Exact GitHub release tag for URLs; must match the tag on github.com/AikidoSec/safe-chain/releases
+SAFE_CHAIN_RELEASE_TAG="${SAFE_CHAIN_RELEASE_TAG-1.4.6}"
+# Optional: sha256 of install-safe-chain.sh; must be set together with SAFE_CHAIN_RELEASE_TAG (remediate only).
 
 LOG_FILE="/var/log/safe-chain-kandji/detect.log"
 LOG_DIR="$(dirname "$LOG_FILE")"
@@ -47,6 +54,16 @@ normalize_version() {
     [ -z "$s" ] && { printf '%s' ''; return 0; }
     t=$(printf '%s' "$s" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
     printf '%s' "$t"
+}
+
+# Normalized value must be a plain dotted numeric version (avoids bad SAFE_CHAIN_MINIMUM_VERSION / tag input).
+is_valid_dotted_version() {
+    [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*$'
+}
+
+# GitHub release tag used in URL path: allow only safe characters.
+is_safe_release_tag() {
+    [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+$'
 }
 
 # True if normalized semver a is strictly less than b (uses sort -V; 1.2.2 < 1.4.6).
@@ -141,16 +158,34 @@ latest_version=""
 latest_version_clean=""
 min_clean=""
 if [ "$SAFE_CHAIN_VERSION_POLICY" = "latest" ]; then
-    latest_version=$(fetch_latest_version)
-    if [ -z "${latest_version:-}" ]; then
-        log "Detection failed: could not resolve latest version."
-        exit 1
+    if [ -n "$SAFE_CHAIN_RELEASE_TAG" ]; then
+        if ! is_safe_release_tag "$SAFE_CHAIN_RELEASE_TAG"; then
+            log "ERROR: SAFE_CHAIN_RELEASE_TAG has invalid characters (use only [A-Za-z0-9._-])."
+            exit 1
+        fi
+        latest_version=$(printf '%s' "$SAFE_CHAIN_RELEASE_TAG")
+        latest_version_clean=$(normalize_version "$latest_version")
+        if ! is_valid_dotted_version "$latest_version_clean"; then
+            log "ERROR: SAFE_CHAIN_RELEASE_TAG must normalize to a dotted version (e.g. 1.4.6); got tag=${SAFE_CHAIN_RELEASE_TAG} normalized=${latest_version_clean}."
+            exit 1
+        fi
+        log "Policy=latest (pinned). Expected release tag ${latest_version} (compare as ${latest_version_clean})."
+    else
+        latest_version=$(fetch_latest_version)
+        if [ -z "${latest_version:-}" ]; then
+            log "Detection failed: could not resolve latest version."
+            exit 1
+        fi
+        latest_version_clean=$(normalize_version "$latest_version")
+        log "Policy=latest. Latest GitHub release is ${latest_version}."
     fi
-    latest_version_clean=$(normalize_version "$latest_version")
-    log "Policy=latest. Latest GitHub release is ${latest_version}."
 else
     min_clean=$(normalize_version "$SAFE_CHAIN_MINIMUM_VERSION")
-    log "Policy=minimum. Required minimum version is ${SAFE_CHAIN_MINIMUM_VERSION}."
+    if ! is_valid_dotted_version "$min_clean"; then
+        log "ERROR: SAFE_CHAIN_MINIMUM_VERSION is not a valid dotted version (value=${SAFE_CHAIN_MINIMUM_VERSION}, normalized=${min_clean})."
+        exit 1
+    fi
+    log "Policy=minimum. Required minimum version is ${SAFE_CHAIN_MINIMUM_VERSION} (normalized ${min_clean})."
 fi
 
 users_checked=0
