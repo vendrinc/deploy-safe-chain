@@ -11,15 +11,36 @@ This repository contains macOS scripts to deploy Aikido Safe Chain per-user in a
 - `instructions.MD`  
   Build plan and implementation notes.
 
-## Compliance Criteria (Per User)
+## Version policy (environment variables)
 
-A user is considered compliant when all conditions are true:
+Both scripts read the same variables (set them in Kandji as custom script environment variables or export them in a wrapper):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `SAFE_CHAIN_VERSION_POLICY` | `latest` | How strictly version is enforced. |
+| `SAFE_CHAIN_MINIMUM_VERSION` | *(empty)* | Required when `SAFE_CHAIN_VERSION_POLICY=minimum`. |
+
+### `latest` (default)
+
+- **Detect:** Calls the GitHub API for the current release tag, then requires each user’s installed version to **match** that tag (after normalizing a leading `v`). Also requires shell integration markers.
+- **Remediate:** Resolves latest once at startup, then installs or upgrades anyone who is not on that version or is missing shell integration.
+
+### `minimum`
+
+- **Detect:** Does **not** call GitHub. Each user must have a binary whose version is **greater than or equal to** `SAFE_CHAIN_MINIMUM_VERSION` (semver-style dotted numbers, e.g. `1.2.2`, `1.4.6`), plus shell integration markers.
+- **Remediate:** Only runs an install when the user has no binary, is **below** the minimum version, or lacks shell integration. When an install is needed, the script fetches the **current** GitHub latest tag and installs from that release (so upgrades still pull current upstream artifacts).
+
+Invalid `SAFE_CHAIN_VERSION_POLICY` or `minimum` without `SAFE_CHAIN_MINIMUM_VERSION` causes a logged error and a non-zero exit.
+
+## Compliance criteria (per user)
+
+A user is compliant when all of the following hold:
 
 1. `~/.safe-chain/bin/safe-chain` exists and is executable.
-2. Installed Safe Chain version equals the latest GitHub release tag.
+2. **Version:** Under `latest`, installed version equals the latest GitHub release tag. Under `minimum`, installed version is not less than `SAFE_CHAIN_MINIMUM_VERSION` (comparison uses dotted numeric versions such as `1.2.2` vs `1.4.6`).
 3. Shell profile files contain Safe Chain integration markers (so shell aliases/hooks are present).
 
-## Detect Script Behavior
+## Detect script behavior
 
 `kandji-safe-chain-detect.sh`:
 
@@ -28,26 +49,36 @@ A user is considered compliant when all conditions are true:
   - UID >= 500
   - valid home directory
   - shell is not `false`/`nologin`
-- Fetches latest version from GitHub API:
+- If `SAFE_CHAIN_VERSION_POLICY=latest`, fetches latest version from:
   - `https://api.github.com/repos/AikidoSec/safe-chain/releases/latest`
-- Compares installed vs latest versions per user.
+- Compares installed vs required version per user (see version policy above).
 - Returns:
-  - `0` if all eligible users are compliant
-  - `1` if any user needs remediation or latest version cannot be fetched
+  - `0` if all eligible users are compliant (or no eligible users are found)
+  - `1` if any user needs remediation, or if `latest` mode cannot fetch the latest version
 
-## Remediate Script Behavior
+## Remediate script behavior
 
 `kandji-safe-chain-remediate.sh`:
 
-- Uses same user enumeration + compliance checks as detect.
-- For users that are not compliant, runs install as that user using a version-pinned installer URL:
-  - `curl -fsSL https://github.com/AikidoSec/safe-chain/releases/download/<latest-tag>/install-safe-chain.sh | sh`
+- Uses the same user enumeration and compliance rules as detect.
+- For non-compliant users, runs install as that user using a release-tagged installer URL:
+  - `curl -fsSL https://github.com/AikidoSec/safe-chain/releases/download/<tag>/install-safe-chain.sh | sh`  
+  (Equivalent in practice to the [latest installer redirect](https://github.com/AikidoSec/safe-chain/releases/latest/download/install-safe-chain.sh) once `<tag>` is resolved.)
+- In `minimum` mode, the GitHub API is called only when at least one user actually needs an install.
 - Ensures user context includes correct `HOME` and a PATH with `~/.safe-chain/bin` first.
 - Includes a fallback direct-binary install path if the upstream installer fails due to local package-manager cleanup edge cases.
-- Re-validates version and shell markers after install.
+- Re-validates version and shell markers after install (`latest`: must match resolved tag; `minimum`: must be at least the configured minimum).
 - Returns:
   - `0` if all required remediations succeed
   - `1` if any remediation fails
+
+## Version detection
+
+Installed version is read from `safe-chain --version`, falling back to `safe-chain -v`, parsing the line:
+
+`Current safe-chain version: <version>`
+
+Versions are compared as dotted numbers (leading `v` on tags or variables is stripped).
 
 ## Logging
 
@@ -57,12 +88,13 @@ Logs are written to:
 - Remediate (root): `/var/log/safe-chain-kandji/remediate_root.log`
 - Remediate (user execution output): `/var/log/safe-chain-kandji/remediate_user.log`
 
-## Kandji Wiring
+## Kandji wiring
 
 1. Upload `kandji-safe-chain-detect.sh` as the Detection script.
 2. Upload `kandji-safe-chain-remediate.sh` as the Remediation script.
 3. Ensure scripts run as root (standard Kandji custom script flow).
+4. Optionally set `SAFE_CHAIN_VERSION_POLICY` and `SAFE_CHAIN_MINIMUM_VERSION` so detect and remediate use the same policy.
 
-## Upstream Project
+## Upstream project
 
 - Safe Chain repo: [AikidoSec/safe-chain](https://github.com/AikidoSec/safe-chain)
